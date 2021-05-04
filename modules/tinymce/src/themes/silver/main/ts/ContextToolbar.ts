@@ -17,7 +17,7 @@ import Editor from 'tinymce/core/api/Editor';
 import Delay from 'tinymce/core/api/util/Delay';
 import { getToolbarMode, ToolbarMode } from './api/Settings';
 import { UiFactoryBackstage, UiFactoryBackstageProviders } from './backstage/Backstage';
-import { hideContextToolbarEvent, showContextToolbarEvent } from './ui/context/ContextEditorEvents';
+import { hideContextToolbarEvent, showContextToolbarEvent, toggleContextToolbarEvent } from './ui/context/ContextEditorEvents';
 import { ContextForm } from './ui/context/ContextForm';
 import { getContextToolbarBounds } from './ui/context/ContextToolbarBounds';
 import * as ToolbarLookup from './ui/context/ContextToolbarLookup';
@@ -53,10 +53,16 @@ const anchorOverrides = {
 
 // On desktop we prioritise north-then-south because it's cleaner, but on mobile we prioritise south to try to avoid overlapping with native context toolbars
 
-const getDesktopAnchorSpecLayouts = (contextbar: AlloyComponent) => {
+const getDesktopAnchorSpecLayouts = (contextbar: AlloyComponent, moveAwayFromPosition: Cell<string>) => {
   // We try to keep our current pinned layout, so we identify any classes that are on the contextbar,
   // and prefer that pinned layout to the other pinned layout
   const getPinnedLayouts = () => {
+    const moveAwayFrom = moveAwayFromPosition.get();
+
+    if (moveAwayFrom !== 'other') {
+      moveAwayFromPosition.set('other');
+    }
+
     return PinnedLayout.contextualPinnedOrder(
       contextbar.element,
       // Something at the top will be anchored from its bottom value and grow upward
@@ -79,7 +85,8 @@ const getDesktopAnchorSpecLayouts = (contextbar: AlloyComponent) => {
           PinnedLayout.pinAtTop,
           PinnedLayout.pinAtBottom
         ];
-      }
+      },
+      moveAwayFrom
     );
   };
 
@@ -102,7 +109,7 @@ const mobileAnchorSpecLayouts = {
     LayoutInside.north, LayoutInside.south, LayoutInside.northwest, LayoutInside.southwest, LayoutInside.northeast, LayoutInside.southeast ]
 };
 
-const getAnchorLayout = (position: InlineContent.ContextPosition, contextbar: AlloyComponent, isTouch: boolean): Partial<AnchorSpec> => {
+const getAnchorLayout = (position: InlineContent.ContextPosition, contextbar: AlloyComponent, isTouch: boolean, moveAwayFromPosition: Cell<string>): Partial<AnchorSpec> => {
   if (position === 'line') {
     return {
       bubble: Bubble.nu(bubbleSize, 0, bubbleAlignments),
@@ -115,7 +122,7 @@ const getAnchorLayout = (position: InlineContent.ContextPosition, contextbar: Al
   } else {
     return {
       bubble: Bubble.nu(0, bubbleSize, bubbleAlignments),
-      layouts: isTouch ? mobileAnchorSpecLayouts : getDesktopAnchorSpecLayouts(contextbar),
+      layouts: isTouch ? mobileAnchorSpecLayouts : getDesktopAnchorSpecLayouts(contextbar, moveAwayFromPosition),
       overrides: anchorOverrides
     };
   }
@@ -195,6 +202,7 @@ const register = (editor: Editor, registryContextToolbars, sink: AlloyComponent,
 
   const lastAnchor = Cell(Optional.none<AnchorSpec>());
   const lastElement = Cell(Optional.none<Element>());
+  const moveAwayFromPosition = Cell<string>('other');
   const timer = Cell(null);
 
   const wrapInPopDialog = (toolbarSpec: AlloySpec) => ({
@@ -268,11 +276,17 @@ const register = (editor: Editor, registryContextToolbars, sink: AlloyComponent,
     });
   });
 
+  editor.on(toggleContextToolbarEvent, (e) => {
+    // eslint-disable-next-line no-console
+    moveAwayFromPosition.set(e.moveAwayFrom);
+    hideOrRepositionIfNecessary();
+  });
+
   const getAnchor = (position: InlineContent.ContextPosition, element: Optional<SugarElement>): AnchorSpec => {
     const anchorage = position === 'node' ? extras.backstage.shared.anchors.node(element) : extras.backstage.shared.anchors.cursor();
     return Merger.deepMerge(
       anchorage,
-      getAnchorLayout(position, contextbar, isTouch())
+      getAnchorLayout(position, contextbar, isTouch(), moveAwayFromPosition)
     );
   };
 

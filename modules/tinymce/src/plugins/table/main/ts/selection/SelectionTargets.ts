@@ -1,7 +1,8 @@
+import { Boxes } from '@ephox/alloy';
 import { Selections } from '@ephox/darwin';
 import { Arr, Cell, Optional, Thunk } from '@ephox/katamari';
 import { RunOperation, Structs, TableLookup, Warehouse } from '@ephox/snooker';
-import { SugarElement, SugarNode } from '@ephox/sugar';
+import { SugarElement, SugarLocation, SugarNode, WindowVisualViewport } from '@ephox/sugar';
 import Editor from 'tinymce/core/api/Editor';
 import { Menu, Toolbar } from 'tinymce/core/api/ui/Ui';
 import * as Util from '../core/Util';
@@ -95,6 +96,43 @@ export const getSelectionTargets = (editor: Editor, selections: Selections): Sel
 
     // Trigger change handlers
     Arr.each(changeHandlers.get(), (handler) => handler());
+
+    targets.get().each((targets) => {
+      if (targets.selection.length < 1) {
+        return;
+      }
+
+      const viewport = WindowVisualViewport.getBounds(editor.getWin());
+      const upperThird = viewport.y + (viewport.height / 3);
+      const lowerThird = viewport.y + ((viewport.height / 3) * 2);
+
+      const locations: ('top' | 'bottom' | 'other')[] = Arr.map(targets.selection, (cell) => {
+        const location = SugarLocation.viewport(cell);
+        const box = Boxes.absolute(cell);
+
+        if ((location.top + box.height) < upperThird) {
+          return 'top';
+        } else if (location.top > lowerThird) {
+          return 'bottom';
+        } else {
+          return 'other';
+        }
+      });
+
+      const isTop = Arr.forall(locations, (value) => {
+        return value === 'top';
+      });
+
+      const isBottom = Arr.forall(locations, (value) => {
+        return value === 'bottom';
+      });
+
+      if (isTop || isBottom) {
+        editor.fire('contexttoolbar-toggle', {
+          moveAwayFrom: isTop ? 'top' : 'bottom'
+        });
+      }
+    });
   };
 
   const onSetup = (api: UiApi, isDisabled: (targets: RunOperation.CombinedTargets) => boolean) => {

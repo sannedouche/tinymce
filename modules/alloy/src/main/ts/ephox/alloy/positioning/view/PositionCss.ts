@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 import { Optional } from '@ephox/katamari';
 import { Class, Css, SugarElement } from '@ephox/sugar';
 import { isDecisionBottomAligned, isDecisionTopAligned, isElementBottomAligned, isElementTopAligned } from '../../api/behaviour/PositionUtils';
@@ -58,12 +59,15 @@ const applyPositionCss = (element: SugarElement, position: PositionCss, decision
         bottom: getValue('bottom'),
         left: getValue('left'),
       };
-
+      console.log('Added the element');
+      console.log(transition);
       Css.setOptions(element, intermediateCssOptions);
       Class.add(element, transition);
       Css.reflow(element);
     }
   });
+
+  console.log(new Error().stack);
 
   Css.setOptions(element, cssOptions);
 };

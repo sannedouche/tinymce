@@ -10,8 +10,10 @@
 
 const showContextToolbarEvent = 'contexttoolbar-show';
 const hideContextToolbarEvent = 'contexttoolbar-hide';
+const toggleContextToolbarEvent = 'contexttoolbar-toggle';
 
 export {
   showContextToolbarEvent,
-  hideContextToolbarEvent
+  hideContextToolbarEvent,
+  toggleContextToolbarEvent
 };

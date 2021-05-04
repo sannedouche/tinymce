@@ -54,6 +54,8 @@ const renderContextToolbar = (spec: { onEscape: () => Optional<boolean>; sink: A
       AddEventsBehaviour.config('context-toolbar-events', [
         AlloyEvents.runOnSource<EventArgs<TransitionEvent>>(NativeEvents.transitionend(), (comp, se) => {
           if (Arr.contains([ 'top', 'bottom' ], se.event.raw.propertyName)) {
+            // eslint-disable-next-line no-console
+            console.log('remove');
             Class.remove(comp.element, 'tox-pop--in-transition');
           } else {
             Class.remove(comp.element, resizingClass);
