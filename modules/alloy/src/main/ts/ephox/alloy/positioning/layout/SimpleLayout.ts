@@ -42,9 +42,17 @@ const simple = (anchor: Anchor, element: SugarElement, bubble: Bubble, layouts: 
 
 // This is the old public API. If we ever need full customisability again, this is how to expose it
 const go = (anchorBox: LayoutTypes.AnchorBox, element: SugarElement, bubble: Bubble, options: ReparteeOptions): void => {
-  const decision = Callouts.layout(anchorBox, element, bubble, options);
+  let decision = Callouts.layout(anchorBox, element, bubble, options);
 
   Callouts.position(element, decision, options);
+
+  // Dans JavaFX, dans le cas du menu contextuel, la taille retournée est plus grande que la réalité et fausse le calcule de la position.
+  // Or, après le premier positionnement, sa taille est juste. Je refais donc un calcul de postionnement et je repositionne...
+  //
+  decision = Callouts.layout(anchorBox, element, bubble, options);
+
+  Callouts.position(element, decision, options);
+
   Callouts.setClasses(element, decision);
   Callouts.setHeight(element, decision, options);
   Callouts.setWidth(element, decision, options);
