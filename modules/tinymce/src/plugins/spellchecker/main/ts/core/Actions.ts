@@ -69,30 +69,70 @@ const defaultSpellcheckCallback = (editor: Editor, pluginUrl: string, currentLan
   };
 };
 
-const sendRpcCall = (editor: Editor, pluginUrl: string, currentLanguageState: Cell<string>, name: string, data: string, successCallback: Function, errorCallback?: Function) => {
+const sendRpcCall = (editor: Editor, pluginUrl: string, currentLanguageState: Cell<string>, name: string, data: string, words: string[], successCallback: Function, errorCallback?: Function) => {
   const userSpellcheckCallback = Settings.getSpellcheckerCallback(editor);
-  const spellCheckCallback = userSpellcheckCallback ? userSpellcheckCallback : defaultSpellcheckCallback(editor, pluginUrl, currentLanguageState);
-  spellCheckCallback.call(editor.plugins.spellchecker, name, data, successCallback, errorCallback);
+  if (userSpellcheckCallback) {
+    userSpellcheckCallback.call(editor.plugins.spellchecker, name, words, successCallback, errorCallback);
+  } else {
+    defaultSpellcheckCallback(editor, pluginUrl, currentLanguageState).call(editor.plugins.spellchecker, name, data, successCallback, errorCallback);
+  }
 };
 
-const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, currentLanguageState: Cell<string>) => {
-  if (finish(editor, startedState, textMatcherState)) {
+const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, currentLanguageState: Cell<string>, cache: Cell<any>, keepStarted = false) => {
+  const lruCache = getCache(cache);
+
+  if (finish(editor, startedState, textMatcherState, keepStarted)) {
+    lruCache.clear();
     return;
   }
 
-  const errorCallback = (message: string) => {
-    editor.notificationManager.open({ text: message, type: 'error' });
-    editor.setProgressState(false);
-    finish(editor, startedState, textMatcherState);
-  };
+  const words = new Set<string>();
+  const result: Record<string, string[]> = {};
+  const minWordLength = Settings.getSpellcheckerMinWordLength(editor);
+  const text = getTextMatcher(editor, textMatcherState).text;
+  (text.match(Settings.getSpellcheckerWordcharPattern(editor)) || []).forEach((word) => {
+    if (word.length >= minWordLength) {
+      const suggestions = lruCache.get(word);
+      if (suggestions) {
+        result[word] = suggestions;
+      } else if (lruCache.contains(word)) {
+        // null est la valeur pour un mot ok
+        //
+      } else if (!words.has(word)) {
+        words.add(word);
+      }
+    }
+  });
 
-  const successCallback = (data: Data) => {
-    markErrors(editor, startedState, textMatcherState, lastSuggestionsState, data);
-  };
+  if (!words.size) {
+    markErrors(editor, startedState, textMatcherState, lastSuggestionsState, { words: result, dictionary: [] });
+  } else {
+    const errorCallback = (message: string) => {
+      editor.notificationManager.open({ text: message, type: 'error' });
+      editor.setProgressState(false);
+      finish(editor, startedState, textMatcherState);
+    };
 
-  editor.setProgressState(true);
-  sendRpcCall(editor, pluginUrl, currentLanguageState, 'spellcheck', getTextMatcher(editor, textMatcherState).text, successCallback, errorCallback);
-  editor.focus();
+    const successCallback = (data: Data) => {
+      words.forEach((word) => {
+        const suggestions = data.words[word];
+        if (suggestions) {
+          lruCache.put(word, suggestions);
+          result[word] = suggestions;
+        } else {
+          // null pour un mot ok
+          //
+          lruCache.put(word, null);
+        }
+      });
+
+      markErrors(editor, startedState, textMatcherState, lastSuggestionsState, { words: result, dictionary: [] });
+    };
+
+    editor.setProgressState(true);
+    sendRpcCall(editor, pluginUrl, currentLanguageState, 'spellcheck', text, Array.from(words), successCallback, errorCallback);
+    editor.focus();
+  }
 };
 
 const checkIfFinished = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>) => {
@@ -104,7 +144,7 @@ const checkIfFinished = (editor: Editor, startedState: Cell<boolean>, textMatche
 const addToDictionary = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, currentLanguageState: Cell<string>, word: string, spans: Element[]) => {
   editor.setProgressState(true);
 
-  sendRpcCall(editor, pluginUrl, currentLanguageState, 'addToDictionary', word, () => {
+  sendRpcCall(editor, pluginUrl, currentLanguageState, 'addToDictionary', word, [ word ], () => {
     editor.setProgressState(false);
     editor.dom.remove(spans, true);
     checkIfFinished(editor, startedState, textMatcherState);
@@ -130,14 +170,14 @@ const ignoreWord = (editor: Editor, startedState: Cell<boolean>, textMatcherStat
   checkIfFinished(editor, startedState, textMatcherState);
 };
 
-const finish = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>) => {
+const finish = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, keepStarted = false) => {
   const bookmark = editor.selection.getBookmark();
   getTextMatcher(editor, textMatcherState).reset();
   editor.selection.moveToBookmark(bookmark);
 
   textMatcherState.set(null);
 
-  if (startedState.get()) {
+  if (startedState.get() && !keepStarted) {
     startedState.set(false);
     Events.fireSpellcheckEnd(editor);
     return true;
@@ -186,7 +226,9 @@ const markErrors = (editor: Editor, startedState: Cell<boolean>, textMatcherStat
 
   editor.setProgressState(false);
 
-  if (Obj.isEmpty(suggestions)) {
+  const empty = Obj.isEmpty(suggestions);
+  const dynamic = Settings.getSpellcheckerDynamic(editor);
+  if (empty && !dynamic) {
     const message = editor.translate('No misspellings found.');
     editor.notificationManager.open({ text: message, type: 'info' });
     startedState.set(false);
@@ -198,26 +240,171 @@ const markErrors = (editor: Editor, startedState: Cell<boolean>, textMatcherStat
     hasDictionarySupport
   });
 
-  const bookmark = editor.selection.getBookmark();
+  if (!empty) {
+    const bookmark = editor.selection.getBookmark();
 
-  getTextMatcher(editor, textMatcherState).find(Settings.getSpellcheckerWordcharPattern(editor)).filter((match) => {
-    return !!suggestions[match.text];
-  }).wrap((match) => {
-    return editor.dom.create('span', {
-      'class': 'mce-spellchecker-word',
-      'aria-invalid': 'spelling',
-      'data-mce-bogus': 1,
-      'data-mce-word': match.text
+    getTextMatcher(editor, textMatcherState).find(Settings.getSpellcheckerWordcharPattern(editor)).filter((match) => {
+      return !!suggestions[match.text];
+    }).wrap((match) => {
+      return editor.dom.create('span', {
+        'class': 'mce-spellchecker-word',
+        'aria-invalid': 'spelling',
+        'data-mce-bogus': 1,
+        'data-mce-word': match.text
+      });
     });
-  });
 
-  editor.selection.moveToBookmark(bookmark);
+    editor.selection.moveToBookmark(bookmark);
+  }
 
-  startedState.set(true);
-  Events.fireSpellcheckStart(editor);
+  if (!startedState.get()) {
+    startedState.set(true);
+    Events.fireSpellcheckStart(editor);
+  }
 };
 
+const setup = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, currentLanguageState: Cell<string>, cache: Cell<any>): void => {
+  const cacheSize = Settings.getSpellcheckerCacheSize(editor);
+  cache.set(new LruCache<string[]>(cacheSize));
+
+  /* eslint-disable no-console */
+  console.debug('spellchecker cache size set to ' + cacheSize);
+  console.debug('spellchecker min word length set to ' + Settings.getSpellcheckerMinWordLength(editor));
+  /* eslint-enable */
+
+  if (!Settings.getSpellcheckerDynamic(editor)) {
+    return;
+  }
+
+  const dynamicDelay = Settings.getSpellcheckerDynamicDelay(editor);
+  const dynamicSpaceDelay = Settings.getSpellcheckerDynamicSpaceDelay(editor);
+
+  // eslint-disable-next-line no-console
+  console.debug('spellchecker configured as dynamic with delay set to ' + dynamicDelay + ' ms and space delay set to ' + dynamicSpaceDelay + ' ms');
+
+  let timeout = 0;
+
+  const inputListener = (e) => {
+    let delay = 0;
+    switch (e.inputType) {
+      case 'insertText':
+      case 'insertReplacementText':
+      case 'insertFromYank':
+      case 'insertFromDrop':
+      case 'insertFromPaste':
+      case 'insertFromPasteAsQuotation':
+      case 'insertTranspose':
+      case 'insertCompositionText':
+      case 'insertLink':
+      case 'deleteWordBackward':
+      case 'deleteWordForward':
+      case 'deleteSoftLineBackward':
+      case 'deleteSoftLineForward':
+      case 'deleteEntireSoftLine':
+      case 'deleteHardLineBackward':
+      case 'deleteHardLineForward':
+      case 'deleteByDrag':
+      case 'deleteByCut':
+      case 'deleteContent':
+      case 'deleteContentBackward':
+      case 'deleteContentForward':
+      case 'historyUndo':
+      case 'historyRedo':
+        delay = (e.data && (e.data.indexOf(' ') >= 0)) ? 500 : 1500;
+        break;
+
+      case 'insertLineBreak':
+      case 'insertParagraph':
+      case 'insertOrderedList':
+      case 'insertUnorderedList':
+      case 'insertHorizontalRule':
+      case 'formatBold':
+      case 'formatItalic':
+      case 'formatUnderline':
+      case 'formatStrikeThrough':
+      case 'formatSuperscript':
+      case 'formatSubscript':
+      case 'formatJustifyFull':
+      case 'formatJustifyCenter':
+      case 'formatJustifyRight':
+      case 'formatJustifyLeft':
+      case 'formatIndent':
+      case 'formatOutdent':
+      case 'formatRemove':
+      case 'formatSetBlockTextDirection':
+      case 'formatSetInlineTextDirection':
+      case 'formatBackColor':
+      case 'formatFontColor':
+      case 'formatFontName':
+        break;
+    }
+
+    if (delay > 0) {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        if (startedState.get()) {
+          spellcheck(editor, pluginUrl, startedState, textMatcherState, lastSuggestionsState, currentLanguageState, cache, true);
+        }
+      }, delay);
+    }
+  };
+
+  editor.on('spellcheckstart spellcheckend', (event) => {
+    if (event.type === 'spellcheckstart') {
+      editor.on('input', inputListener);
+    } else {
+      editor.off('input', inputListener);
+    }
+  });
+};
+
+const getCache = (cache: Cell<any>): LruCache<string[]> => cache.get();
+
+class LruCache<T> {
+  private values: Map<string, T> = new Map<string, T>();
+  private maxEntries: number;
+
+  public constructor(maxEntries: number) {
+    this.maxEntries = maxEntries;
+  }
+
+  public get(key: string): T {
+    const hasKey = this.values.has(key);
+    let entry: T;
+    if (hasKey) {
+      // peek the entry, re-insert for LRU strategy
+      //
+      entry = this.values.get(key);
+      this.values.delete(key);
+      this.values.set(key, entry);
+    }
+    return entry;
+  }
+
+  public put(key: string, value: T): void {
+    if (this.maxEntries > 0) {
+      if (this.values.size >= this.maxEntries) {
+        // least-recently used cache eviction strategy
+        //
+        const keyToDelete = this.values.keys().next().value;
+        this.values.delete(keyToDelete);
+      }
+
+      this.values.set(key, value);
+    }
+  }
+
+  public contains(key: string): boolean {
+    return this.values.has(key);
+  }
+
+  public clear() {
+    this.values.clear();
+  }
+}
+
 export {
+  setup,
   spellcheck,
   checkIfFinished,
   addToDictionary,

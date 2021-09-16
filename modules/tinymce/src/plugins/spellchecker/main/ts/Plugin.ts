@@ -11,9 +11,11 @@ import * as DetectProPlugin from './alien/DetectProPlugin';
 import * as Api from './api/Api';
 import * as Commands from './api/Commands';
 import * as Settings from './api/Settings';
-import { LastSuggestion } from './core/Actions';
+import * as Actions from './core/Actions';
 import * as Buttons from './ui/Buttons';
 import * as SuggestionsMenu from './ui/SuggestionsMenu';
+
+type LastSuggestion = Actions.LastSuggestion;
 
 export default () => {
   PluginManager.add('spellchecker', (editor, pluginUrl) => {
@@ -22,11 +24,13 @@ export default () => {
       const currentLanguageState = Cell<string>(Settings.getLanguage(editor));
       const textMatcherState = Cell(null);
       const lastSuggestionsState = Cell<LastSuggestion>(null);
+      const cache = Cell<any>(null);
 
-      Buttons.register(editor, pluginUrl, startedState, textMatcherState, currentLanguageState, lastSuggestionsState);
+      Buttons.register(editor, pluginUrl, startedState, textMatcherState, currentLanguageState, lastSuggestionsState, cache);
       SuggestionsMenu.setup(editor, pluginUrl, lastSuggestionsState, startedState, textMatcherState, currentLanguageState);
-      Commands.register(editor, pluginUrl, startedState, textMatcherState, lastSuggestionsState, currentLanguageState);
+      Commands.register(editor, pluginUrl, startedState, textMatcherState, lastSuggestionsState, currentLanguageState, cache);
 
+      Actions.setup(editor, pluginUrl, startedState, textMatcherState, lastSuggestionsState, currentLanguageState, cache);
       return Api.get(editor, startedState, lastSuggestionsState, textMatcherState, currentLanguageState, pluginUrl);
     }
   });

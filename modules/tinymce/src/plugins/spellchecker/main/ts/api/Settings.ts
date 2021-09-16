@@ -34,10 +34,35 @@ const getSpellcheckerWordcharPattern = (editor: Editor) => {
   return editor.getParam('spellchecker_wordchar_pattern', defaultPattern);
 };
 
+const getSpellcheckerDynamic = (editor: Editor) => {
+  return !!editor.getParam('spellchecker_dynamic');
+};
+
+const getSpellcheckerDynamicDelay = (editor: Editor): number => {
+  return editor.getParam('spellchecker_dynamic_delay', 1500, 'number');
+};
+
+const getSpellcheckerDynamicSpaceDelay = (editor: Editor): number => {
+  return editor.getParam('spellchecker_dynamic_space_delay', 500, 'number');
+};
+
+const getSpellcheckerCacheSize = (editor: Editor): number => {
+  return editor.getParam('spellchecker_cache_size', 1000, 'number');
+};
+
+const getSpellcheckerMinWordLength = (editor: Editor): number => {
+  return editor.getParam('spellchecker_min_word_length', 3, 'number');
+};
+
 export {
   getLanguages,
   getLanguage,
   getRpcUrl,
   getSpellcheckerCallback,
-  getSpellcheckerWordcharPattern
+  getSpellcheckerWordcharPattern,
+  getSpellcheckerDynamic,
+  getSpellcheckerDynamicDelay,
+  getSpellcheckerDynamicSpaceDelay,
+  getSpellcheckerCacheSize,
+  getSpellcheckerMinWordLength
 };
