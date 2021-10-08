@@ -47,11 +47,15 @@ const getSpellcheckerDynamicSpaceDelay = (editor: Editor): number => {
 };
 
 const getSpellcheckerCacheSize = (editor: Editor): number => {
-  return editor.getParam('spellchecker_cache_size', 1000, 'number');
+  return editor.getParam('spellchecker_cache_size', 5000, 'number');
 };
 
 const getSpellcheckerMinWordLength = (editor: Editor): number => {
   return editor.getParam('spellchecker_min_word_length', 3, 'number');
+};
+
+const getSpellcheckerIgnoredNodes = (editor: Editor): string => {
+  return editor.getParam('spellchecker_ignored_nodes', '');
 };
 
 export {
@@ -64,5 +68,6 @@ export {
   getSpellcheckerDynamicDelay,
   getSpellcheckerDynamicSpaceDelay,
   getSpellcheckerCacheSize,
-  getSpellcheckerMinWordLength
+  getSpellcheckerMinWordLength,
+  getSpellcheckerIgnoredNodes
 };

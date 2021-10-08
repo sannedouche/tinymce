@@ -5,6 +5,8 @@
  * For commercial licenses see https://www.tiny.cloud/
  */
 
+import * as Settings from '../api/Settings';
+
 const isContentEditableFalse = (node) => {
   return node && node.nodeType === 1 && node.contentEditable === 'false';
 };
@@ -13,13 +15,14 @@ export type Match = Record<string, string>;
 
 export interface DomTextMatcher {
   text: string;
+  getCurrentText: () => string;
   matches: string[];
   each: (cb: Function) => DomTextMatcher;
   filter: (cb: Function) => DomTextMatcher;
   reset: () => DomTextMatcher;
   matchFromElement: (element: HTMLElement) => Match;
   elementFromMatch: (match: Match) => HTMLElement;
-  find: (regex: RegExp, data: Record<string, string>) => DomTextMatcher;
+  find: (regex: RegExp, data?: Record<string, string>) => DomTextMatcher;
   add: (start: number, length: number, data: Record<string, string>) => DomTextMatcher;
   wrap: (cb: Function) => DomTextMatcher;
   unwrap: (match?: Match) => DomTextMatcher;
@@ -35,6 +38,9 @@ export const DomTextMatcher = (node, editor): DomTextMatcher => {
   const blockElementsMap = editor.schema.getBlockElements(); // H1-H6, P, TD etc
   const hiddenTextElementsMap = editor.schema.getWhiteSpaceElements(); // TEXTAREA, PRE, STYLE, SCRIPT
   const shortEndedElementsMap = editor.schema.getShortEndedElements(); // BR, IMG, INPUT
+
+  const ignoredNodes = Settings.getSpellcheckerIgnoredNodes(editor).trim().split(',');
+  const ignoredNodesRegExp = ignoredNodes.length ? new RegExp(ignoredNodes.join('|'), 'i') : null;
 
   const createMatch = (m, data) => {
     if (!m[0]) {
@@ -54,6 +60,10 @@ export const DomTextMatcher = (node, editor): DomTextMatcher => {
 
     if (node.nodeType === 3) {
       return node.data;
+    }
+
+    if (ignoredNodesRegExp && ignoredNodesRegExp.test(node.nodeName)) {
+      return '';
     }
 
     if (hiddenTextElementsMap[node.nodeName] && !blockElementsMap[node.nodeName]) {
@@ -357,7 +367,7 @@ export const DomTextMatcher = (node, editor): DomTextMatcher => {
   * @param {Object} [data] Optional custom data element for the match.
   * @return {DomTextMatcher} Current DomTextMatcher instance.
   */
-  function find(regex, data) {
+  function find(regex, data = null) {
     if (text && regex.global) {
       while ((m = regex.exec(text))) {
         matches.push(createMatch(m, data));
@@ -476,6 +486,7 @@ export const DomTextMatcher = (node, editor): DomTextMatcher => {
 
   return {
     text,
+    getCurrentText: () => getText(node),
     matches,
     each,
     filter,

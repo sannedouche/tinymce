@@ -19,13 +19,23 @@ export interface Data {
   dictionary?: any;
 }
 
-const getTextMatcher = (editor, textMatcherState) => {
+const getTextMatcher = (editor, textMatcherState): DomTextMatcher => {
   if (!textMatcherState.get()) {
     const textMatcher = DomTextMatcher(editor.getBody(), editor);
     textMatcherState.set(textMatcher);
   }
 
   return textMatcherState.get();
+};
+
+const resetTextMatcher = (editor: Editor, textMatcherState: Cell<DomTextMatcher>) => {
+  if (textMatcherState.get()) {
+    const bookmark = editor.selection.getBookmark();
+    textMatcherState.get().reset();
+    editor.selection.moveToBookmark(bookmark);
+
+    textMatcherState.set(null);
+  }
 };
 
 const defaultSpellcheckCallback = (editor: Editor, pluginUrl: string, currentLanguageState: Cell<string>) => {
@@ -78,10 +88,19 @@ const sendRpcCall = (editor: Editor, pluginUrl: string, currentLanguageState: Ce
   }
 };
 
-const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, currentLanguageState: Cell<string>, cache: Cell<any>, keepStarted = false) => {
+const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, currentLanguageState: Cell<string>, cache: Cell<any>, fromDynamicHandler = false) => {
   const lruCache = getCache(cache);
 
-  if (finish(editor, startedState, textMatcherState, keepStarted)) {
+  if (fromDynamicHandler) {
+    if (lruCache.spellChecking) {
+      lruCache.restartSpellCheck = true;
+      return;
+    }
+    // je ne nettoie pas les erreurs pour l'instant
+    //
+  } else if (finish(editor, startedState, textMatcherState)) {
+    // todo : clear du cache ou pas ?
+    //
     lruCache.clear();
     return;
   }
@@ -89,7 +108,7 @@ const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolea
   const words = new Set<string>();
   const result: Record<string, string[]> = {};
   const minWordLength = Settings.getSpellcheckerMinWordLength(editor);
-  const text = getTextMatcher(editor, textMatcherState).text;
+  const text = fromDynamicHandler ? getTextMatcher(editor, textMatcherState).getCurrentText() : getTextMatcher(editor, textMatcherState).text;
   (text.match(Settings.getSpellcheckerWordcharPattern(editor)) || []).forEach((word) => {
     if (word.length >= minWordLength) {
       const suggestions = lruCache.get(word);
@@ -105,9 +124,10 @@ const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolea
   });
 
   if (!words.size) {
-    markErrors(editor, startedState, textMatcherState, lastSuggestionsState, { words: result, dictionary: [] });
+    markErrors(editor, startedState, textMatcherState, lastSuggestionsState, { words: result, dictionary: [] }, fromDynamicHandler);
   } else {
     const errorCallback = (message: string) => {
+      lruCache.spellChecking = false;
       editor.notificationManager.open({ text: message, type: 'error' });
       editor.setProgressState(false);
       finish(editor, startedState, textMatcherState);
@@ -126,18 +146,39 @@ const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolea
         }
       });
 
-      markErrors(editor, startedState, textMatcherState, lastSuggestionsState, { words: result, dictionary: [] });
+      editor.setProgressState(false);
+
+      markErrors(editor, startedState, textMatcherState, lastSuggestionsState, { words: result, dictionary: [] }, fromDynamicHandler);
+
+      lruCache.spellChecking = false;
+      if (lruCache.restartSpellCheck) {
+        lruCache.restartSpellCheck = false;
+        spellcheck(editor, pluginUrl, startedState, textMatcherState, lastSuggestionsState, currentLanguageState, cache, true);
+      }
     };
 
-    editor.setProgressState(true);
+    if (!Settings.getSpellcheckerDynamic(editor)) {
+      editor.setProgressState(true);
+    }
+
+    lruCache.spellChecking = true;
     sendRpcCall(editor, pluginUrl, currentLanguageState, 'spellcheck', text, Array.from(words), successCallback, errorCallback);
     editor.focus();
   }
 };
 
+const hasError = (editor: Editor): boolean => {
+  return (editor.dom.select('span.mce-spellchecker-word').length > 0);
+};
+
 const checkIfFinished = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>) => {
-  if (!editor.dom.select('span.mce-spellchecker-word').length) {
-    finish(editor, startedState, textMatcherState);
+  if (!hasError(editor)) {
+    const dynamic = Settings.getSpellcheckerDynamic(editor);
+    if (dynamic) {
+      resetTextMatcher(editor, textMatcherState);
+    } else {
+      finish(editor, startedState, textMatcherState);
+    }
   }
 };
 
@@ -170,14 +211,10 @@ const ignoreWord = (editor: Editor, startedState: Cell<boolean>, textMatcherStat
   checkIfFinished(editor, startedState, textMatcherState);
 };
 
-const finish = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, keepStarted = false) => {
-  const bookmark = editor.selection.getBookmark();
-  getTextMatcher(editor, textMatcherState).reset();
-  editor.selection.moveToBookmark(bookmark);
+const finish = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>) => {
+  resetTextMatcher(editor, textMatcherState);
 
-  textMatcherState.set(null);
-
-  if (startedState.get() && !keepStarted) {
+  if (startedState.get()) {
     startedState.set(false);
     Events.fireSpellcheckEnd(editor);
     return true;
@@ -220,11 +257,9 @@ export interface LastSuggestion {
   hasDictionarySupport: boolean;
 }
 
-const markErrors = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, data: Data) => {
+const markErrors = (editor: Editor, startedState: Cell<boolean>, textMatcherState: Cell<DomTextMatcher>, lastSuggestionsState: Cell<LastSuggestion>, data: Data, refreshTextMatcher = false) => {
   const hasDictionarySupport = !!data.dictionary;
   const suggestions = data.words;
-
-  editor.setProgressState(false);
 
   const empty = Obj.isEmpty(suggestions);
   const dynamic = Settings.getSpellcheckerDynamic(editor);
@@ -239,6 +274,10 @@ const markErrors = (editor: Editor, startedState: Cell<boolean>, textMatcherStat
     suggestions,
     hasDictionarySupport
   });
+
+  if (refreshTextMatcher) {
+    resetTextMatcher(editor, textMatcherState);
+  }
 
   if (!empty) {
     const bookmark = editor.selection.getBookmark();
@@ -268,8 +307,9 @@ const setup = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, t
   cache.set(new LruCache<string[]>(cacheSize));
 
   /* eslint-disable no-console */
-  console.debug('spellchecker cache size set to ' + cacheSize);
-  console.debug('spellchecker min word length set to ' + Settings.getSpellcheckerMinWordLength(editor));
+  console.log('spellchecker cache size set to ' + cacheSize);
+  console.log('spellchecker min word length set to ' + Settings.getSpellcheckerMinWordLength(editor));
+  console.log('spellchecker ignored nodes are [' + Settings.getSpellcheckerIgnoredNodes(editor) + ']');
   /* eslint-enable */
 
   if (!Settings.getSpellcheckerDynamic(editor)) {
@@ -280,7 +320,7 @@ const setup = (editor: Editor, pluginUrl: string, startedState: Cell<boolean>, t
   const dynamicSpaceDelay = Settings.getSpellcheckerDynamicSpaceDelay(editor);
 
   // eslint-disable-next-line no-console
-  console.debug('spellchecker configured as dynamic with delay set to ' + dynamicDelay + ' ms and space delay set to ' + dynamicSpaceDelay + ' ms');
+  console.log('spellchecker configured as dynamic with delay set to ' + dynamicDelay + ' ms and space delay set to ' + dynamicSpaceDelay + ' ms');
 
   let timeout = 0;
 
@@ -363,6 +403,8 @@ const getCache = (cache: Cell<any>): LruCache<string[]> => cache.get();
 class LruCache<T> {
   private values: Map<string, T> = new Map<string, T>();
   private maxEntries: number;
+  public spellChecking = false;
+  public restartSpellCheck = false;
 
   public constructor(maxEntries: number) {
     this.maxEntries = maxEntries;
