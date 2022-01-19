@@ -109,8 +109,9 @@ const spellcheck = (editor: Editor, pluginUrl: string, startedState: Cell<boolea
   const result: Record<string, string[]> = {};
   const minWordLength = Settings.getSpellcheckerMinWordLength(editor);
   const text = fromDynamicHandler ? getTextMatcher(editor, textMatcherState).getCurrentText() : getTextMatcher(editor, textMatcherState).text;
+  const wordValidator = Settings.getSpellcheckerWordValidator(editor);
   (text.match(Settings.getSpellcheckerWordcharPattern(editor)) || []).forEach((word) => {
-    if (word.length >= minWordLength) {
+    if ((word.length >= minWordLength) && (!wordValidator || wordValidator(word))) {
       const suggestions = lruCache.get(word);
       if (suggestions) {
         result[word] = suggestions;
